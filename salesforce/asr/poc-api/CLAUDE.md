@@ -299,56 +299,10 @@ Blob combined  = EncodingUtil.convertFromHex(ivHex + saltHex + cipHex);
 
 ---
 
-## `AscottApiService` — refactoring specification
+## `AscottApiService` —  specification
 
-### Remove entirely
+### Public methods
 
-- `NC_MULESOFT` constant and `NC_CRYPTO_SVC` constant
-- `callViaMuleSoft(String path, Map<String,Object> payload)` method
-- `callViaDirectWithCryptoSidecar(String xsApp, Map<String,Object> payload)` method
-- `getEncryptedT(Map<String,Object> payload)` private method
-
-### Keep unchanged
-
-- `NC_ASCOTT_API` constant
-- `generateCorrelationId()` static method
-- All three `@AuraEnabled` public method signatures
-
-### Add
-
-```apex
-// @TestVisible — tests inject a pre-built EncryptResult to bypass crypto entirely.
-// Taking EncryptResult (not Map) is the key design decision: encryptPayload() runs
-// SOQL that returns null Protected fields in test context, so the HTTP layer must
-// be independently testable without going through crypto.
-@TestVisible
-static AscottApiResponse callAscott(AscottCrypto.EncryptResult enc) {
-    HttpRequest req = new HttpRequest();
-    req.setEndpoint(
-        'callout:' + NC_ASCOTT_API
-        + '/?xs_app=' + EncodingUtil.urlEncode(enc.xsApp, 'UTF-8')
-        + '&t=' + enc.encryptedT
-    );
-    req.setMethod('GET');
-    req.setHeader('Accept', 'application/json');
-    req.setHeader('X-Correlation-Id', generateCorrelationId());
-    req.setTimeout(TIMEOUT_MS);
-
-    try {
-        HttpResponse res = new Http().send(req);
-        return AscottApiResponse.fromHttpResponse(res);
-    } catch (CalloutException e) {
-        throw new AscottApiException(
-            'Network error calling Ascott: ' + e.getMessage(),
-            AscottApiException.ErrorCategory.NETWORK_ERROR
-        );
-    }
-}
-```
-
-### Update public methods
-
-Replace `callViaMuleSoft(...)` with `encryptPayload` + `callAscott(enc)` in all three public methods:
 
 ```apex
 public static AscottApiResponse checkUserExistByEmail(String email) {
@@ -364,18 +318,6 @@ public static AscottApiResponse checkUserExistByEmail(String email) {
 
 > For the rationale behind this design (why Protected CMT, why not Named Credentials, POC vs PROD guidance), see **Credential storage strategy** in the Architecture section above.
 
-### Object definition
-`force-app/main/default/objects/Ascott_Credential__mdt/Ascott_Credential__mdt.object-meta.xml`
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<CustomObject xmlns="http://soap.sforce.com/2006/04/metadata">
-    <description>Ascott ASR API credentials per environment. Aes_Key_Base64__c and Sys_Token__c are Protected — encrypted at rest, not exportable via Metadata API, must be set manually in Setup.</description>
-    <label>Ascott Credential</label>
-    <pluralLabel>Ascott Credentials</pluralLabel>
-</CustomObject>
-```
-
 ### Fields to create under `objects/Ascott_Credential__mdt/fields/`
 
 | Field file | Label | Type | Protected | Set by |
@@ -389,28 +331,7 @@ public static AscottApiResponse checkUserExistByEmail(String email) {
 ### UAT record — deploy only non-protected fields
 `force-app/main/default/customMetadata/Ascott_Credential.UAT.md-meta.xml`
 
-Only IV, SALT, and xs_app are included here. `Aes_Key_Base64__c` and `Sys_Token__c` are Protected and cannot be in source — set them manually in Setup after deploy.
-
-```xml
-<?xml version="1.0" encoding="UTF-8"?>
-<CustomMetadata xmlns="http://soap.sforce.com/2006/04/metadata"
-                xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance">
-    <label>UAT</label>
-    <protected>false</protected>
-    <values>
-        <field>Iv__c</field>
-        <value xsi:type="xsd:string">PcGK5n4y72XL</value>
-    </values>
-    <values>
-        <field>Salt__c</field>
-        <value xsi:type="xsd:string">sG3YrEDKPaj2nUXF</value>
-    </values>
-    <values>
-        <field>Xs_App__c</field>
-        <value xsi:type="xsd:string">asr_api_v2_1</value>
-    </values>
-</CustomMetadata>
-```
+ `Aes_Key_Base64__c` and `Sys_Token__c` are Protected and cannot be in source — set them manually in Setup after deploy.
 
 ### Post-deploy Setup steps (every environment)
 
@@ -457,42 +378,7 @@ private static Ascott_Credential__mdt testCred() {
 
 ---
 
-## `AscottApiServiceTest` — update specification
-
-### Remove
-
-- `RoutingMock` inner class
-- `AscottNetworkFailMock` inner class
-- `namedCredentialConstants_haveExpectedValues` test (NC_MULESOFT and NC_CRYPTO_SVC constants are deleted)
-- `callViaDirectWithCryptoSidecar_*` test methods (5 tests)
-- `callViaMuleSoft_requestBody_containsExpectedFields` (POST-specific assertion)
-
-### Update — HTTP response tests call `callAscott(enc)` directly
-
-`callAscott` now takes `AscottCrypto.EncryptResult`, not a Map. Tests that exercise HTTP responses (200/400/401/500, network error) must call `callAscott` directly with a dummy `EncryptResult` — calling through the public `@AuraEnabled` methods would hit `AscottCrypto.encryptPayload()` which queries CMT and finds no record in test context.
-
-```apex
-// Pattern for all HTTP response tests:
-AscottCrypto.EncryptResult dummyEnc = new AscottCrypto.EncryptResult('DUMMY_T', 'asr_api_v2_1');
-Test.setMock(HttpCalloutMock.class, new StaticMock(200, '{"exist":"true",...}'));
-AscottApiResponse r = AscottApiService.callAscott(dummyEnc);
-```
-
-`callViaMuleSoft_requestHeaders_areCorrect` → rename to `callAscott_requestIsGet_withQueryParams`:
-
-```apex
-// Before (POST assertions):
-System.assertEquals('POST', mock.lastRequest.getMethod());
-System.assert(body.contains('checkUserExist'));
-
-// After (GET assertions via callAscott directly):
-AscottCrypto.EncryptResult enc = new AscottCrypto.EncryptResult('DUMMY_T', 'asr_api_v2_1');
-AscottApiService.callAscott(enc);
-System.assertEquals('GET', mock.lastRequest.getMethod());
-System.assert(mock.lastRequest.getEndpoint().contains('xs_app='));
-System.assert(mock.lastRequest.getEndpoint().contains('&t='));
-System.assertEquals('', mock.lastRequest.getBody());
-```
+## `AscottApiServiceTest` 
 
 ### Add
 
