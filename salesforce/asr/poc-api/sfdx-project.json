@@ -1,12 +1,21 @@
 {
   "packageDirectories": [
     {
+      "versionName": "Spring 2026 — AES-GCM UAT",
+      "versionNumber": "1.0.0.NEXT",
       "path": "force-app",
-      "default": true
+      "default": true,
+      "package": "Ascott ASR Integration",
+      "versionDescription": "Initial release. AES-256-GCM encryption via Salesforce Spring 2026 native Crypto. After install: set Aes_Key_Base64__c and Sys_Token__c in Setup > Custom Metadata Types > Ascott Credential."
     }
   ],
   "name": "poc-api",
   "namespace": "",
   "sfdcLoginUrl": "https://login.salesforce.com",
-  "sourceApiVersion": "66.0"
+  "sourceApiVersion": "66.0",
+  "packageAliases": {
+    "Ascott ASR Integration": "0Hod500000005fdCAA",
+    "Ascott ASR Integration@1.0.0-1": "04td5000000CUojAAG",
+    "Ascott ASR Integration@1.0.0-2": "04td5000000CUqLAAW"
+  }
 }
